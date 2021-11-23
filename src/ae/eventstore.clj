@@ -314,6 +314,22 @@
     "application/json"         ::event.data.type/json
     "application/octet-stream" ::event.data.type/octet-stream))
 
+(defn EventData-> [e] nil)
+
+(defn StreamRevision-> [sr] nil)
+
+(defn ExpectedRevision-> [er] nil)
+
+(defn Position-> [p] nil)
+
+(defn RecordedEvent-> [e] nil)
+
+(defn ResolvedEvent-> [e] nil)
+
+(defn Listener-> [l] nil)
+
+(defn UserCredentials-> [c] nil)
+
 (defn NodePreference-> [np]
   (match/match (.name np)
     "LEADER"            ::np/leader
@@ -322,8 +338,22 @@
     "RANDOM"            ::np/random))
 
 (defn Endpoint-> [e]
-  {::endpoint/hostname (.getHostname e)
-   ::endpoint/port (.getPort e)})
+  {::ep/hostname (.getHostname e)
+   ::ep/port     (.getPort e)})
+
+(defn Settings-> [s] nil)
+
+(defn TimeUnit-> [tu] nil)
+
+(defn AppendOptions-> [o] nil)
+
+(defn ReadStreamOptions-> [o] nil)
+
+(defn ReadAllOptions-> [o] nil)
+
+(defn WriteResult-> [wr] nil)
+
+(defn ReadResult-> [rr] nil)
 
 ;; Methods
 
