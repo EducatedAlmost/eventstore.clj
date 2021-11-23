@@ -19,9 +19,9 @@
     </developer>
   </developers>
   <scm>
-    <url>https://github.com/ae/eventstore.clj</url>
-    <connection>scm:git:git://github.com/ae/eventstore.clj.git</connection>
-    <developerConnection>scm:git:ssh://git@github.com/ae/eventstore.clj.git</developerConnection>
+    <url>https://github.com/EducatedAlmost/eventstore.clj</url>
+    <connection>scm:git:git://github.com/EducatedAlmost/eventstore.clj.git</connection>
+    <developerConnection>scm:git:ssh://git@github.com/EducatedAlmost/eventstore.clj.git</developerConnection>
     <tag>v0.1.0-SNAPSHOT</tag>
   </scm>
   <dependencies>
