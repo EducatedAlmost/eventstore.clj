@@ -191,11 +191,10 @@
 (defn ->Position [{::position/keys [commit prepare]}]
   (new Position commit prepare))
 
-(defn ->RecordedEvent
-  [{stream-id ::stream/id stream-revision ::revision/stream
-    event-id ::event/id event-type ::event/type event-data
-    ::event/data content-type ::event.data/type
-    ::keys [user-metadata created position]}]
+(defn ->RecordedEvent [{stream-id ::stream/id stream-revision ::revision/stream
+                        event-id ::event/id event-type ::event/type event-data
+                        ::event/data content-type ::event.data/type
+                        ::keys [user-metadata created position]}]
   (new RecordedEvent
        stream-id (->StreamRevision stream-revision) event-id (->Position position)
        {"content-type" (->ContentType content-type)
@@ -229,101 +228,90 @@
 (defn add-host [builder host]
   (.addHost builder (->Endpoint host)))
 
-(defn ->Settings
-  [{::keys [node-preference
-            credentials]
-    ::settings/keys [dns-discover?
-                     max-discover-attempts
-                     discovery-interval
-                     gossip-timeout
-                     tls?
-                     tls-verify-cert?
-                     throw-on-append-failure?
-                     hosts
-                     keep-alive-timeout
-                     keep-alive-interval]}]
-  (let [{::cred/keys [username password]} credentials
-        b (cond-> (ConnectionSettingsBuilder.)
-            (some? dns-discover?)            (.dnsDiscover dns-discover?)
-            (some? max-discover-attempts)    (.maxDiscoverAttempts max-discover-attempts)
-            (some? discovery-interval)       (.discoveryInterval discovery-interval)
-            (some? gossip-timeout)           (.gossipTimeout gossip-timeout)
-            (some? node-preference)          (.nodePreference (->NodePreference node-preference))
-            (some? tls?)                     (.tls tls?)
-            (some? tls-verify-cert?)         (.tlsVerifyCert tls-verify-cert?)
-            (some? throw-on-append-failure?) (.throwOnAppendFailure throw-on-append-failure?)
-            (some? credentials)              (.defaultCredentials username password)
-            (some? keep-alive-timeout)       (.keepAliveTimeout keep-alive-timeout)
-            (some? keep-alive-interval)      (.keepAliveInterval keep-alive-interval))
-        b (reduce add-host b hosts)]
-    (.buildConnectionSettings b)))
+(defn ->Settings [{::keys [node-preference]
+                   {::cred/keys [username password]} ::credentials
+                   ::settings/keys [dns-discover?
+                                    max-discover-attempts
+                                    discovery-interval
+                                    gossip-timeout
+                                    tls?
+                                    tls-verify-cert?
+                                    throw-on-append-failure?
+                                    hosts
+                                    keep-alive-timeout
+                                    keep-alive-interval]}]
+  (cond-> (new ConnectionSettingsBuilder)
+    (some? dns-discover?)            (.dnsDiscover dns-discover?)
+    (some? max-discover-attempts)    (.maxDiscoverAttempts max-discover-attempts)
+    (some? discovery-interval)       (.discoveryInterval discovery-interval)
+    (some? gossip-timeout)           (.gossipTimeout gossip-timeout)
+    (some? node-preference)          (.nodePreference (->NodePreference node-preference))
+    (some? tls?)                     (.tls tls?)
+    (some? tls-verify-cert?)         (.tlsVerifyCert tls-verify-cert?)
+    (some? throw-on-append-failure?) (.throwOnAppendFailure throw-on-append-failure?)
+    (and  (some? username)
+          (some? password))          (.defaultCredentials username password)
+    (some? keep-alive-timeout)       (.keepAliveTimeout keep-alive-timeout)
+    (some? keep-alive-interval)      (.keepAliveInterval keep-alive-interval)
+    (some? hosts)                    #(reduce add-host % hosts)
+    true                             (.buildConnectionSettings)))
 
 (defn ->TimeUnit [unit]
   (match/match unit
     :days         (TimeUnit/DAYS)
-    :hours (TimeUnit/HOURS)
-    :minutes (TimeUnit/MINUTES)
-    :seconds  (TimeUnit/SECONDS)
+    :hours        (TimeUnit/HOURS)
+    :minutes      (TimeUnit/MINUTES)
+    :seconds      (TimeUnit/SECONDS)
     :milliseconds (TimeUnit/MILLISECONDS)
     :microseconds (TimeUnit/MICROSECONDS)
-    :nanoseconds (TimeUnit/NANOSECONDS)
+    :nanoseconds  (TimeUnit/NANOSECONDS)
     :else (-> "Cannot be converted to TimeUnit: %s"
-              (format (str unit))
-              (Exception.)
-              throw)))
+              (format (str unit)) (Exception.) throw)))
 
-(defn ->Timeouts
-  [{::options/keys [shutdown-timeout shutdown-timeout-unit
-                    subscription-timeout subscription-timeout-unit]}]
+(defn ->Timeouts [{::options/keys [shutdown-timeout shutdown-timeout-unit
+                                   subscription-timeout subscription-timeout-unit]}]
   (let [b (TimeoutsBuilder/newBuilder)]
     (cond-> b
       (and shutdown-timeout shutdown-timeout-unit)
-      (.withShutdownTimeout shutdown-timeout
-                            (->TimeUnit shutdown-timeout-unit))
+      ,   (.withShutdownTimeout shutdown-timeout (->TimeUnit shutdown-timeout-unit))
       (and subscription-timeout subscription-timeout-unit)
-      (.withSubscriptionTimeout subscription-timeout
-                                (->TimeUnit subscription-timeout-unit))
+      ,   (.withSubscriptionTimeout subscription-timeout (->TimeUnit subscription-timeout-unit))
       true (.build))))
 
-(defn apply-base-options
-  [builder {::options/keys [timeouts requires-leader?] ::keys [credentials]}]
+(defn apply-base-options [builder {::options/keys [timeouts requires-leader?] ::keys [credentials]}]
   (cond-> builder
-    (some? timeouts) (.Timeouts (->Timeouts timeouts))
+    (some? timeouts)         (.Timeouts (->Timeouts timeouts))
     (some? requires-leader?) (.requiresLeader requires-leader?)
-    (some? credentials) (.authenticated (->UserCredentials credentials))
-    true (.build)))
+    (some? credentials)      (.authenticated (->UserCredentials credentials))
+    true                     (.build)))
 
-(defn ->AppendOptions [{::keys [::revision/stream] :as options}]
-  (cond-> (.get AppendToStreamOptions)
-    true (apply-base-options options)
-    (some? stream-revision) (.expectedStream.Revision (->ExpectedRevision stream-revision))
-    true (.build)))
+(defn ->AppendOptions [{stream-revision ::revision/stream :as options}]
+  (cond-> (-> AppendToStreamOptions .get (apply-base-options options))
+    (some? stream-revision) (.expectedRevision (->ExpectedRevision stream-revision))
+    true                    (.build)))
 
-(defn ->ReadStreamOptions
-  [{:keys [::direction ::options/resolve-link-tos? ::revision/stream] :as options}]
-  (cond-> (.get ReadStreamOptions)
-    true (apply-base-options options)
-    (= direction ::direction/forwards) (.forwards)
+(defn ->ReadStreamOptions [{:keys [::direction ::options/resolve-link-tos?]
+                            stream-revision ::revision/stream :as options}]
+  (cond-> (-> ReadStreamOptions .get (apply-base-options options))
+    (= direction ::direction/forwards)  (.forwards)
     (= direction ::direction/backwards) (.backwards)
-    (some? resolve-link-tos?) (.resolveLinkTos resolve-link-tos?)
-    (some? stream-revision) (.fromRevision (->StreamRevision stream-revision))
-    true (.build)))
+    (some? resolve-link-tos?)           (.resolveLinkTos resolve-link-tos?)
+    (some? stream-revision)             (.fromRevision (->StreamRevision stream-revision))
+    true                                (.build)))
 
-(defn ->ReadAllOptions
-  [{:keys [::direction ::options/resolve-link-tos? ::position] :as options}]
-  (cond-> (.get ReadStreamOptions)
-    true (apply-base-options options)
-    (= direction ::direction/forwards) (.forwards)
+(defn ->ReadAllOptions [{:keys [::direction ::options/resolve-link-tos? ::position] :as options}]
+  (cond-> (-> ReadAllOptions .get (apply-base-options options))
+    (= direction ::direction/forwards)  (.forwards)
     (= direction ::direction/backwards) (.backwards)
-    (some? resolve-link-tos?) (.resolveLinkTos resolve-link-tos?)
-    (some? position) (.fromPosition (->Position position))
-    true (.build)))
+    (some? resolve-link-tos?)           (.resolveLinkTos resolve-link-tos?)
+    (some? position)                    (.fromPosition (->Position position))
+    true                                (.build)))
 
 ;; Export functions
 
 (defn ContentType-> [t]
   (match/match t
-    "application/json" ::event.data.type/json
+    "application/json"         ::event.data.type/json
     "application/octet-stream" ::event.data.type/octet-stream))
 
 (defn NodePreference-> [np]
