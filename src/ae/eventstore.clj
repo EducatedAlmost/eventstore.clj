@@ -349,27 +349,17 @@
 (defn ->future [f]
   (future (.get f)))
 
-#_{:clj-kondo/ignore [:clojure-lsp/unused-public-var]}
 (defn append [client stream options events]
-  (let [f (.appendToStream client stream (->AppendOptions options) (map ->EventData events))]
-    (->future f)))
+  (-> client (.appendToStream stream (->AppendOptions options) (map ->EventData events)) ->future))
 
-#_{:clj-kondo/ignore [:clojure-lsp/unused-public-var]}
 (defn set-stream-meta [client stream append-options]
-  (let [f (.setStreamMetadata client stream (->AppendOptions append-options))]
-    (->future f)))
+  (-> client (.setStreamMetadata stream (->AppendOptions append-options)) ->future))
 
-#_{:clj-kondo/ignore [:clojure-lsp/unused-public-var]}
 (defn read-stream [client stream max-count read-options]
-  (let [f (.readStream client stream max-count (->ReadStreamOptions read-options))]
-    (->future f)))
+  (-> client (.readStream stream max-count (->ReadStreamOptions read-options)) ->future))
 
-#_{:clj-kondo/ignore [:clojure-lsp/unused-public-var]}
 (defn get-stream-meta [client stream read-options]
-  (let [f (.getStreamMetadata client stream (->ReadStreamOptions read-options))]
-    (->future f)))
+  (-> client (.getStreamMetadata stream (->ReadStreamOptions read-options)) ->future))
 
-#_{:clj-kondo/ignore [:clojure-lsp/unused-public-var]}
 (defn read-all [client max-count read-options]
-  (let [f (.readAll client max-count (->ReadAllOptions read-options))]
-    (->future f)))
+  (-> client (.readAll max-count (->ReadAllOptions read-options)) ->future))
