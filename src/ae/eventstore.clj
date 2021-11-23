@@ -1,12 +1,13 @@
 (ns ae.eventstore
   (:require [clojure.spec.alpha :as s]
             [clojure.spec.gen.alpha :as gen]
-            [clj-uuid :as uuid]
+            ;; [clj-uuid :as uuid]
             [java-time :as time]
-            [clojure.pprint :as pp]
+            ;; [clojure.pprint :as pp]
             [clojure.core.match :as match]
             [ae.alias+ns :as ns])
-  (:import [com.eventstore.dbclient
+  (:import [java.util.concurrent TimeUnit]
+           [com.eventstore.dbclient
             ;; ,   Acls
             ,   AppendToStreamOptions
             ,   ClusterInfo
