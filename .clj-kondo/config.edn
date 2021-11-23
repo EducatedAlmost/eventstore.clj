@@ -1,0 +1,4 @@
+{:lint-as {ae.alias+ns/alias+ns clojure.core/alias}
+ :linters {:clojure-lsp/unused-public-var {:level :off}
+           :unused-import {:level :off}
+           :unresolved-namespace {:level :off}}}

@@ -338,11 +338,9 @@
 
 ;; Methods
 
-#_{:clj-kondo/ignore [:clojure-lsp/unused-public-var]}
 (defn connect [settings]
   (EventStoreDBClient/create (->Settings settings)))
 
-#_{:clj-kondo/ignore [:clojure-lsp/unused-public-var]}
 (defn shutdown [client]
   (.shutdown client))
 
