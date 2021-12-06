@@ -3,3 +3,14 @@
 Read the blog post: https://blog.almost.education/posts/eventstore-clj
 
 This is a Clojure library for using the Event Store DB. It is a wrapper around [[https://github.com/EventStore/EventStoreDB-Client-Java][EventStoreDB-Client-Java]]. It provides conversion between Event Store objects and convenient Clojure alternatives, as well as idiomatic functions for writing and reading events to an Event Store instance.
+
+** Example
+
+#+begin_src clojure
+;; Use tls=false if running a local instance with --insecure
+(def sett (es/->Settings-from-connection-string
+           "esdb://localhost:2113?tls=false"))
+(def db (EventStoreDBClient/create sett))
+(def rr (es/read-all db 100 {}))
+(-> @rr ae.eventstore/ReadResult->)
+#+end_src

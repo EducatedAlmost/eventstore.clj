@@ -1,10 +1,11 @@
 (ns ae.eventstore
   (:require [clojure.spec.alpha :as s]
             [clojure.spec.gen.alpha :as gen]
-            ;; [clj-uuid :as uuid]
+            [clj-uuid :as uuid]
             [java-time :as time]
             ;; [clojure.pprint :as pp]
             [clojure.core.match :as match]
+            [cheshire.core :as json]
             [ae.alias+ns :as ns])
   (:import [java.util.concurrent TimeUnit]
            [com.eventstore.dbclient
@@ -30,6 +31,7 @@
             ,   EventFilter
             ,   EventStoreDBClient
             ,   EventStoreDBClientSettings
+            ,   EventStoreDBConnectionString
             ,   EventTypeFilter
             ,   ExpectedRevision
             ,   NodePreference
@@ -75,6 +77,7 @@
   'event           'ae.eventstore.event
   'event.data      'ae.eventstore.event.data
   'event.data.type 'ae.eventstore.event.data.type
+  'metadata        'ae.eventstore.metdata
   'np              'ae.eventstore.node-preference
   'options         'ae.eventstore.options
   'position        'ae.eventstore.position
@@ -91,7 +94,7 @@
   (s/def ::event/type string?)
   (s/def ::event/data any?)
   (s/def ::event.data/type #{::event.data.type/json ::event.data.type/octet-stream})
-  (s/def ::user.metadata any?)
+  (s/def ::metadata/user any?)
   (s/def ::stream/id string?)
   (s/def ::revision/stream (s/or :int int? :enum #{::revision/start ::revision/end}))
   (s/def ::revision/expected
@@ -100,11 +103,15 @@
   (s/def ::created
     (s/with-gen #(instance? java.time.Instant %) (fn [] (gen/fmap time/instant (s/gen int?)))))
 
+;; defn ->EventData [{:keys [::event/id ::event/data]
+;;                     event-type ::event/type content-type ::event.data/type metadata ::metadata/user}]
   (s/def ::event
-    (s/keys :req [::event.id ::event.type ::event.data ::event.data.type ::user.metadata]))
+    (s/keys :req [::event/id ::event/type ::event/data ::event.data/type ::metadata/user]))
   (s/def ::recorded
-    (s/keys :req [::stream.id ::revision/stream ::event.id ::position
-                  ::system.metadata ::event.data ::user.metadata]))
+    (s/keys :req [::stream/id ::revision/stream
+                  ::event/id ::event/type ::event/data ::event.data/type
+                  ::metadata/system ::metadata/user
+                  ::position ::created]))
   (s/def ::resolved/event ::recorded)
   (s/def ::resolved/link ::recorded)
   (s/def ::resolved (s/keys :req [::resolved/event ::resolved/link]))
@@ -166,23 +173,34 @@
 ;; Import functions
 
 (defn ->ContentType [t]
-  (match/match t
+  (match/match
+   t
     ::event.data.type/json "application/json"
     ::event.data.type/octet-stream "application/octet-stream"))
 
+(defn ->EventData [{:keys [::event/id ::event/data]
+                    event-type ::event/type content-type ::event.data/type metadata ::metadata/user}]
+  ;; TODO use the builder to create the byte array for data
+  (new EventData id event-type content-type data metadata))
+
+;; TODO allow for binary
 (defn ->EventData [{:keys [::event/id ::event/data ::user-metadata]
                     event-type ::event/type content-type ::event.data/type}]
-  ;; TODO use the builder to create the byte array for data
-  (new EventData id event-type content-type data user-metadata))
+  (cond-> (new EventDataBuilder)
+    (some? id) (.eventId id)
+    (some? data) (.json event-type (-> data json/generate-string bytes))
+    (some? user-metadata) (.metadataAsBytes (-> user-metadata json/generate-string bytes))))
 
 (defn ->StreamRevision [sr]
-  (match/match sr
+  (match/match
+   sr
     ::revision/start (StreamRevision/START)
     ::revision/end (StreamRevision/END)
     :else (new StreamRevision sr)))
 
 (defn ->ExpectedRevision [er]
-  (match/match er
+  (match/match
+   er
     ::revision/any (ExpectedRevision/ANY)
     ::revision/no-stream (ExpectedRevision/NO_STREAM)
     ::revision/stream-exists (ExpectedRevision/STREAM_EXISTS)
@@ -228,33 +246,38 @@
 (defn add-host [builder host]
   (.addHost builder (->Endpoint host)))
 
-(defn ->Settings [{::keys [node-preference]
-                   {::cred/keys [username password]} ::credentials
-                   ::settings/keys [dns-discover?
-                                    max-discover-attempts
-                                    discovery-interval
-                                    gossip-timeout
-                                    tls?
-                                    tls-verify-cert?
-                                    throw-on-append-failure?
-                                    hosts
-                                    keep-alive-timeout
-                                    keep-alive-interval]}]
-  (cond-> (new ConnectionSettingsBuilder)
-    (some? dns-discover?)            (.dnsDiscover dns-discover?)
-    (some? max-discover-attempts)    (.maxDiscoverAttempts max-discover-attempts)
-    (some? discovery-interval)       (.discoveryInterval discovery-interval)
-    (some? gossip-timeout)           (.gossipTimeout gossip-timeout)
-    (some? node-preference)          (.nodePreference (->NodePreference node-preference))
-    (some? tls?)                     (.tls tls?)
-    (some? tls-verify-cert?)         (.tlsVerifyCert tls-verify-cert?)
-    (some? throw-on-append-failure?) (.throwOnAppendFailure throw-on-append-failure?)
-    (and  (some? username)
-          (some? password))          (.defaultCredentials username password)
-    (some? keep-alive-timeout)       (.keepAliveTimeout keep-alive-timeout)
-    (some? keep-alive-interval)      (.keepAliveInterval keep-alive-interval)
-    (some? hosts)                    #(reduce add-host % hosts)
-    true                             (.buildConnectionSettings)))
+(defn ->Settings-from-connection-string [str]
+  (EventStoreDBConnectionString/parse str))
+
+(defn ->Settings [sett]
+  (if (string? sett) (->Settings-from-connection-string sett)
+      (let [{::keys [node-preference]
+             {::cred/keys [username password]} ::credentials
+             ::settings/keys [dns-discover?
+                              max-discover-attempts
+                              discovery-interval
+                              gossip-timeout
+                              tls?
+                              tls-verify-cert?
+                              throw-on-append-failure?
+                              hosts
+                              keep-alive-timeout
+                              keep-alive-interval]} sett]
+        (cond-> (new ConnectionSettingsBuilder)
+          (some? dns-discover?)            (.dnsDiscover dns-discover?)
+          (some? max-discover-attempts)    (.maxDiscoverAttempts max-discover-attempts)
+          (some? discovery-interval)       (.discoveryInterval discovery-interval)
+          (some? gossip-timeout)           (.gossipTimeout gossip-timeout)
+          (some? node-preference)          (.nodePreference (->NodePreference node-preference))
+          (some? tls?)                     (.tls tls?)
+          (some? tls-verify-cert?)         (.tlsVerifyCert tls-verify-cert?)
+          (some? throw-on-append-failure?) (.throwOnAppendFailure throw-on-append-failure?)
+          (and  (some? username)
+                (some? password))          (.defaultCredentials username password)
+          (some? keep-alive-timeout)       (.keepAliveTimeout keep-alive-timeout)
+          (some? keep-alive-interval)      (.keepAliveInterval keep-alive-interval)
+          (some? hosts)                    (#(reduce add-host % hosts))
+          true                             (.buildConnectionSettings)))))
 
 (defn ->TimeUnit [unit]
   (match/match unit
@@ -268,44 +291,53 @@
     :else (-> "Cannot be converted to TimeUnit: %s"
               (format (str unit)) (Exception.) throw)))
 
-(defn ->Timeouts [{::options/keys [shutdown-timeout shutdown-timeout-unit
-                                   subscription-timeout subscription-timeout-unit]}]
-  (let [b (TimeoutsBuilder/newBuilder)]
-    (cond-> b
-      (and shutdown-timeout shutdown-timeout-unit)
-      ,   (.withShutdownTimeout shutdown-timeout (->TimeUnit shutdown-timeout-unit))
-      (and subscription-timeout subscription-timeout-unit)
-      ,   (.withSubscriptionTimeout subscription-timeout (->TimeUnit subscription-timeout-unit))
-      true (.build))))
+(defn ->Timeouts
+  ([] (Timeouts/DEFAULT))
+  ([{::options/keys [shutdown-timeout shutdown-timeout-unit
+                     subscription-timeout subscription-timeout-unit]}]
+   (let [b (TimeoutsBuilder/newBuilder)]
+     (cond-> b
+       (and shutdown-timeout shutdown-timeout-unit)
+       ,   (.withShutdownTimeout shutdown-timeout (->TimeUnit shutdown-timeout-unit))
+       (and subscription-timeout subscription-timeout-unit)
+       ,   (.withSubscriptionTimeout subscription-timeout (->TimeUnit subscription-timeout-unit))
+       true (.build)))))
 
 (defn apply-base-options [builder {::options/keys [timeouts requires-leader?] ::keys [credentials]}]
   (cond-> builder
     (some? timeouts)         (.Timeouts (->Timeouts timeouts))
     (some? requires-leader?) (.requiresLeader requires-leader?)
     (some? credentials)      (.authenticated (->UserCredentials credentials))
-    true                     (.build)))
+    ;; true                     (.build)
+    ))
 
-(defn ->AppendOptions [{stream-revision ::revision/stream :as options}]
-  (cond-> (-> AppendToStreamOptions .get (apply-base-options options))
-    (some? stream-revision) (.expectedRevision (->ExpectedRevision stream-revision))
-    true                    (.build)))
+(defn ->AppendOptions
+  ([] (AppendToStreamOptions/get))
+  ([{stream-revision ::revision/stream :as options}]
+   (cond-> (-> (AppendToStreamOptions/get) (apply-base-options options))
+     (some? stream-revision) (.expectedRevision (->ExpectedRevision stream-revision))
+     true                    (.build))))
 
-(defn ->ReadStreamOptions [{:keys [::direction ::options/resolve-link-tos?]
-                            stream-revision ::revision/stream :as options}]
-  (cond-> (-> ReadStreamOptions .get (apply-base-options options))
-    (= direction ::direction/forwards)  (.forwards)
-    (= direction ::direction/backwards) (.backwards)
-    (some? resolve-link-tos?)           (.resolveLinkTos resolve-link-tos?)
-    (some? stream-revision)             (.fromRevision (->StreamRevision stream-revision))
-    true                                (.build)))
+(defn ->ReadStreamOptions
+  ([] (ReadStreamOptions/get))
+  ([{:keys [::direction ::options/resolve-link-tos?] stream-revision ::revision/stream :as options}]
+   (cond-> (-> (ReadStreamOptions/get) (apply-base-options options))
+     (= direction ::direction/forwards)  (.forwards)
+     (= direction ::direction/backwards) (.backwards)
+     (some? resolve-link-tos?)           (.resolveLinkTos resolve-link-tos?)
+     (some? stream-revision)             (.fromRevision (->StreamRevision stream-revision))
+     true                                (.build))))
 
-(defn ->ReadAllOptions [{:keys [::direction ::options/resolve-link-tos? ::position] :as options}]
-  (cond-> (-> ReadAllOptions .get (apply-base-options options))
-    (= direction ::direction/forwards)  (.forwards)
-    (= direction ::direction/backwards) (.backwards)
-    (some? resolve-link-tos?)           (.resolveLinkTos resolve-link-tos?)
-    (some? position)                    (.fromPosition (->Position position))
-    true                                (.build)))
+(defn ->ReadAllOptions
+  ([] (ReadAllOptions/get))
+  ([{:keys [::direction ::options/resolve-link-tos? ::position] :as options}]
+   (cond-> (-> (ReadAllOptions/get) (apply-base-options options))
+     (= direction ::direction/forwards)  (.forwards)
+     (= direction ::direction/backwards) (.backwards)
+     (some? resolve-link-tos?)           (.resolveLinkTos resolve-link-tos?)
+     (some? position)                    (.fromPosition (->Position position))
+     ;; true                                (.build)
+     )))
 
 ;; Export functions
 
@@ -322,9 +354,28 @@
 
 (defn Position-> [p] nil)
 
-(defn RecordedEvent-> [e] nil)
+(defn Data-> [d t]
+  (if (= t "application/json")
+    (-> d slurp json/parse-string)
+    (-> d slurp)))
 
-(defn ResolvedEvent-> [e] nil)
+(defn RecordedEvent-> [e]
+  {::stream/id (.getStreamId e)
+   ::revision/stream (-> e .getStreamRevision StreamRevision->)
+   ::event/id (.getEventId e)
+   ::position (-> e .getPosition Position->)
+   ::created (.getCreated e)
+   ::metadata/system nil
+   ::metadata/user nil
+   ::event/data (-> e .getEventData (Data-> (.getContentType e)))
+   ::event.data/type (-> e .getContentType ContentType->)})
+
+;; (json/parse-string "{\"$stream\":\"bar\"}")
+
+(defn ResolvedEvent-> [e]
+  {::resolved/event (-> e .getEvent RecordedEvent->)
+   ::resolved/link (if (nil? (.getLink e)) nil
+                       (-> e .getLink RecordedEvent->))})
 
 (defn Listener-> [l] nil)
 
@@ -353,9 +404,14 @@
 
 (defn WriteResult-> [wr] nil)
 
-(defn ReadResult-> [rr] nil)
+(defn ReadResult-> [rr]
+  (map ResolvedEvent-> (.getEvents rr)))
 
 ;; Methods
+;; TODO add !s to impure function names?
+;; should these methods return Clojure structures?
+;; add some prefix -raw for ones that don't?
+;; Unimportant for now
 
 (defn connect [settings]
   (EventStoreDBClient/create (->Settings settings)))
@@ -379,4 +435,6 @@
   (-> client (.getStreamMetadata stream (->ReadStreamOptions read-options)) ->future))
 
 (defn read-all [client max-count read-options]
-  (-> client (.readAll max-count (->ReadAllOptions read-options)) ->future))
+  (-> client
+      (.readAll max-count (->ReadAllOptions read-options))
+      ->future))

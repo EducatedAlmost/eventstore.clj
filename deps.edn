@@ -7,7 +7,9 @@
         danlentz/clj-uuid {:mvn/version "0.1.9"}
         clojure.java-time/clojure.java-time {:mvn/version "0.3.3"}
         ae/alias+ns {:git/url "https://github.com/EducatedAlmost/alias-ns"
-                     :git/sha  "e3d4d5e4fab55e6f77bb027f16c3b99ece7afbc4"}}
+                     :git/sha  "e3d4d5e4fab55e6f77bb027f16c3b99ece7afbc4"}
+        cheshire/cheshire {:mvn/version "5.10.1"}
+        com.fasterxml.jackson.core/jackson-core {:mvn/version "2.3.1-SNAPSHOT"}}
  :aliases
  {:test
   {:extra-paths ["test"]
