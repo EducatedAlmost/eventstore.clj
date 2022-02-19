@@ -490,28 +490,6 @@
          (update ::node-preference -NodePreference->)
          (update ::settings/hosts #(map -Endpoint-> %))))))
 
-(-> {:ae.eventstore.settings/discovery-interval 12633835,
-     :ae.eventstore.settings/max-discover-attempts 57508,
-     :ae.eventstore.settings/hosts [#:ae.eventstore.endpoint{:hostname "9VkCWl", :port 19142}
-                                    #:ae.eventstore.endpoint{:hostname "kjbgm30WlO8B70NEqyr71u2", :port 683}
-                                    #:ae.eventstore.endpoint{:hostname "R0B1418Cj0327", :port 4159}
-                                    #:ae.eventstore.endpoint{:hostname "Ab1T2iY7b6vej5ng5", :port 46007}
-                                    #:ae.eventstore.endpoint{:hostname "5iELy25", :port 119}
-                                    #:ae.eventstore.endpoint{:hostname "Hx7X2iBQ8X25pEa", :port 5}
-                                    #:ae.eventstore.endpoint{:hostname "R0AT9", :port 816}
-                                    #:ae.eventstore.endpoint{:hostname "jA", :port 5}],
-     :ae.eventstore.settings/tls? true,
-     :ae.eventstore.settings/gossip-timeout 67,
-     :ae.eventstore/credentials #:ae.eventstore.credentials{:username "JrjegVEN4fg0d", :password ""},
-     :ae.eventstore.settings/throw-on-append-failure? false,
-     :ae.eventstore.settings/keep-alive-interval 214569,
-     :ae.eventstore.settings/keep-alive-timeout 18672969,
-     :ae.eventstore/node-preference :ae.eventstore.node-preference/leader,
-     :ae.eventstore.settings/tls-verify-cert? true,
-     :ae.eventstore.settings/dns-discover? false}
-    ->Settings
-    (Settings-> (gen/generate (s/gen ::credentials))))
-
 ;; Options
 
 (defn ->TimeUnit [unit]
@@ -529,8 +507,6 @@
 (defn TimeUnit-> [unit]
   (-> unit j/from-java str/lower-case keyword))
 
-(-> :seconds ->TimeUnit TimeUnit->)
-
 (defn ->Timeouts
   ([] (Timeouts/DEFAULT))
   ([{::options/keys [shutdown-timeout shutdown-timeout-unit
@@ -545,9 +521,6 @@
 
 (defn Timeouts-> [_]
   (throw (new Exception "This method is unimplemented due to limitations of the underlying library.")))
-
-(-> (gen/generate (s/gen ::options/timeouts))
-    ->Timeouts)
 
 ;; TODO convert stream revision into expected revision
 
@@ -601,9 +574,6 @@
      (some? position) (.fromPosition (->Position position))
      (some? resolve-link-tos?) (.resolveLinkTos resolve-link-tos?))))
 
-(-> (gen/generate (s/gen ::options/read-all))
-    ->ReadAllOptions)
-
 ;; SoftDelete
 ;; ExpectedRevision
 ;; Base
@@ -633,21 +603,12 @@
       (update ::position -Position->)
       (update ::rev/stream -StreamRevision->)))
 
-(-> {:ae.eventstore.revision/stream -1447132, :ae.eventstore/position #:ae.eventstore.position{:prepare -10622, :commit -1}}
-    ->WriteResult
-    WriteResult->
-    (#(s/valid? ::result/write %)))
-
 ;; ReadResult
 (defn ->ReadResult [rr]
   (new ReadResult (map ->ResolvedEvent rr)))
 
 (defn ReadResult-> [rr]
   (->> rr .getEvents (map ResolvedEvent->)))
-
-(-> (gen/generate (s/gen ::result/read))
-    ->ReadResult
-    ReadResult->)
 
 ;; Subscriptions
 
