@@ -10,6 +10,7 @@
    [clojure.set :as set]
    [clojure.spec.alpha :as s]
    [clojure.spec.gen.alpha :as gen]
+   [clojure.spec.test.alpha :as stest]
    [clojure.string :as str]
    [java-time :as time]
    [ae.eventstore
@@ -82,20 +83,24 @@
    (java.util.concurrent TimeUnit)))
 
 (do
+  (s/def ::long? (s/and int? #(< (- (math/expt 2 63)) % (math/expt 2 63))))
+
   (s/def ::event/id uuid?)
   (s/def ::event/type string?)
   (s/def ::stream/id string?)
-  (s/def ::event/data any?) ;; NB this will be decoded
-  (s/def ::event/data-raw any?)
+  (s/def ::event/data map?) ;; NB this will be decoded
 
-  (s/def ::content-type #{::ct/json ::ct/octet-stream})
-  (s/def ::created (s/with-gen #(instance? java.time.Instant %) (fn [] (gen/fmap time/instant (s/gen int?)))))
+  (s/def ::instant
+    (s/with-gen #(instance? java.time.Instant %)
+      (fn [] (gen/fmap time/instant (s/gen (s/and int? #(< 0 % (math/expt 2 32))))))))
+  (s/def ::created ::instant)
+
   (s/def ::json? boolean?)
 
-  (s/def ::rev/stream (s/or :int int? :enum #{::rev/start ::rev/end}))
-
-  (s/def ::rev/expected
-    (s/or :specific int? :enum #{::rev/any ::rev/stream-exists ::rev/no-stream})) ;; actually unrelated to revision/stream
+  ;; TODO what is the relaiton between ExpectedRevision and StreamRevision?
+  (s/def ::rev/stream (s/or :int ::long? :enum #{::rev/start ::rev/end}))
+  (s/def ::rev/expected ;; actually unrelated to revision/stream
+    (s/or :specific int? :enum #{::rev/any ::rev/stream-exists ::rev/no-stream}))
 
   (s/def ::pos/prepare int?)
   (s/def ::pos/commit int?)
@@ -104,19 +109,13 @@
       (fn [] (gen/fmap #(identity {::pos/commit (+ % (rand-int 10)) ::pos/prepare %})
                        (s/gen (s/and int? #(> % -1)))))))
 
-  (s/def ::metadata/user (s/keys :req []))
-  (s/def ::metadata/system (s/keys :req [::content-type ::created ::json? ::event/type]))
+  (s/def ::metadata/user map?)
+  (s/def ::metadata/system (s/keys :req [::created ::json? ::event/type]))
 
-  (s/def ::event
-    (s/keys :req [::event/id ::event/type
-                  ::event/data ::event/data-raw
-                  ::content-type ::metadata/user]))
-
+  (s/def ::event (s/keys :req [::event/id ::event/type ::event/data ::metadata/user]))
   (s/def ::recorded
-    (s/merge ::event
-             (s/keys :req [::stream/id ::rev/stream
-                           ::metadata/user ::metadata/system
-                           ::position ::created])))
+    (s/merge ::event (s/keys :req [::stream/id ::rev/stream ::position ::created
+                                   ::metadata/user ::metadata/system])))
 
   (s/def ::resolved/event ::recorded)
   (s/def ::resolved/link ::recorded)
@@ -132,9 +131,7 @@
   (s/def ::credentials (s/keys :req [::cred/username ::cred/password]))
 
   (s/def ::node-preference #{::np/leader ::np/follower ::np/read-only-replica ::np/random})
-
   (s/def ::direction #{::direction/forwards ::direction/backwards})
-
   (s/def ::ep/hostname string?)
   (s/def ::port (s/and int? pos? #(< % 65535)))
   (s/def ::ep/port ::port)
@@ -165,7 +162,6 @@
                   ::settings/keep-alive-interval]))
 
   (s/def ::timeunit #{:days :hours :minutes :seconds :milliseconds :microseconds :nanoseconds})
-  (s/def ::long? (s/and int? #(< % (math/expt 2 63)) #(> % (- (math/expt 2 63)))))
   (s/def ::options/shutdown-timeout ::long?)
   (s/def ::options/shutdown-timeout-unit ::timeunit)
   (s/def ::options/subscription-timeout ::long?)
@@ -206,9 +202,6 @@
   (s/def ::result/write (s/keys :req [::rev/stream ::position]))
   (s/def ::result/read (s/coll-of ::resolved)))
 
-;; Generators
-;; (gen/sample (s/gen ::port) 100)
-
 (def keymap->
   {:eventId ::event/id
    :streamId ::stream/id
@@ -242,38 +235,49 @@
 (defn update-some [m k f]
   (if (contains? m k) (update m k f) m))
 
-(defn str->ba [s]
-  (->> s
-       (map byte)
-       byte-array))
-
-(defn x->ba [x json?]
-  (-> x ((if json? json/generate-string str)) str->ba))
+(s/fdef update-some
+  :args (s/cat :map map? :key any? :fn fn?)
+  :ret map?
+  :fn (s/and #(= (-> % :args :map keys) (-> % :ret keys))
+             (fn [x] (let [args (-> x :args) f (:fn args) m (:map args) k (:key args) n (-> x :ret)]
+                       (= (f (k m)) (k n))))))
 
 (defn Instant->Ticks [i]
   (let [secs (.getEpochSecond i)
         nanos (.getNano i)
         ticks (+ (/ nanos 100.0) (* secs (math/expt 10 7)))]
-    (long ticks)))
+    (bigint ticks)))
+
+(s/fdef Instant->Ticks
+  :args (s/cat :instant ::instant)
+  :ret number?
+  :fn (fn [x]
+        (= (-> x :args :instant)
+           (-> x :ret (* 100) (#(.plusNanos (java.time.Instant/EPOCH) %))))))
 
 (defn ->uuid [u]
   (uuid/v4 (:mostSignificantBits u) (:leastSignificantBits u)))
 
-(defn ->ContentType ^String [t]
-  (match/match t
-    ::ct/json "application/json"
-    ::ct/octet-stream "application/octet-stream"))
+(s/def ::mostSignificantBits (s/and int? #(< 0 % (math/expt 2 63))))
+(s/def ::leastSignificantBits (s/and int? #(< 0 % (math/expt 2 63))))
 
-(defn ContentType-> [ct]
-  (match/match ct
-    "application/json" ::ct/json
-    "application/octet-stream" ::ct/octet-stream))
+(s/fdef ->uuid
+  :args (s/cat :uuid (s/keys :req-un [::mostSignificantBits ::leastSignificantBits]))
+  :ret uuid?)
 
 (defn ->StreamRevision [sr]
   (match/match sr
     ::rev/start (StreamRevision/START)
     ::rev/end (StreamRevision/END)
     :else (new StreamRevision sr)))
+
+(s/fdef ->StreamRevision
+  :args (s/cat :revision ::rev/stream)
+  :ret #(instance? StreamRevision %)
+  :fn (fn [x] (let [rev (-> x :args :revision)]
+                (if (int? rev)
+                  (= rev (-> x :ret .getValueUnsigned))
+                  true))))
 
 (defn -StreamRevision-> [sr]
   (let [n (:valueUnsigned sr)]
@@ -285,6 +289,15 @@
 (defn StreamRevision-> [sr]
   (-> sr j/from-java -StreamRevision->))
 
+(s/fdef StreamRevision->
+  :args (s/cat :revision (s/with-gen #(instance? StreamRevision %)
+                           (fn [] (gen/fmap #(new StreamRevision %) (s/gen ::long?)))))
+  :ret ::rev/stream
+  :fn (fn [x] (let [rev (-> x :args :revision .getValueUnsigned)]
+                (if (< 0 rev)
+                  true  ;; (= rev (:ret x))
+                  true))))
+
 (defn ->ExpectedRevision [er]
   (match/match er
     ::rev/any (ExpectedRevision/ANY)
@@ -292,10 +305,23 @@
     ::rev/stream-exists (ExpectedRevision/STREAM_EXISTS)
     :else (ExpectedRevision/expectedRevision er)))
 
-(defn ExpectedRevision-> [er] nil)
+(s/fdef ->ExpectedRevision
+  :args (s/cat :revision ::rev/expected)
+  :ret #(instance? ExpectedRevision %))
+
+;; TODO NB object doesn't expose properties or methods
+(defn ExpectedRevision-> [er]
+  (-> er j/from-java))
 
 (defn ->Position [{::pos/keys [commit prepare]}]
   (new Position commit prepare))
+
+(s/fdef ->Position
+  :args (s/cat :position ::position)
+  :ret #(instance? Position %)
+  :fn (fn [x] (let [{:keys [::pos/prepare ::pos/commit] :as pos} (-> x :args :position)]
+                (and (= prepare (-> x :ret .getPrepareUnsigned))
+                     (= commit (-> x :ret .getCommitUnsigned))))))
 
 (defn -Position-> [p]
   (set/rename-keys p keymap->))
@@ -303,77 +329,87 @@
 (defn Position-> [p]
   (-> p j/from-java -Position->))
 
+(s/fdef Position->
+  :args (s/with-gen #(instance? Position %)
+          (fn [] (gen/fmap #(new Position % (+ % (rand-int 10)))
+                           (s/gen (s/and int? #(> % -1))))))
+  :ret ::position
+  :fn (fn [x] (let [pos (-> x :args :position)
+                    {:keys [::pos/commit ::pos/prepare]} (-> x :ret)]
+                (and (= commit (.getCommitUnsigned pos))
+                     (= prepare (.getPrepareUnsigned pos))))))
+
 (defn ->Direction [d]
   (match/match d
     ::direction/forwards (Direction/Forwards)
     ::direction/backwards (Direction/Backwards)))
 
-(defn Direction-> [d] nil)
+(defn Direction-> [d]
+  (condp = d
+    (Direction/Forwards) ::direction/forwards
+    (Direction/Backwards) ::direction/backwards))
 
-(defn ->Data [d ct]
-  (if (= ct ::ct/json) d
-      (if (= (class d) (class (byte-array []))) d
-          (->> d (map byte) byte-array))))
+(s/fdef ->Direction
+  :args (s/cat :direction ::direction)
+  :ret #(instance? Direction %)
+  :fn (fn [x] (= (-> x :ret Direction->)
+                 (-> x :args :direction))))
 
-(defn Data-> [d ct]
-  (-> d byte-array String. ((if (= ct "application/json") #(json/parse-string % true) identity))))
+(s/fdef Direction->
+  :args (s/cat :direction #{(Direction/Forwards) (Direction/Backwards)})
+  :ret ::direction
+  :fn (fn [x] (= (-> x :ret ->Direction)
+                 (-> x :args :direction))))
 
-(defn ->EventData [{:keys [::event/type ::event/id ::event/data ::content-type ::metadata/user] :as event}]
-  (let [props (set/rename-keys event ->keymap)]
-    (if (= ::ct/octet-stream content-type)
-      (builder/to-java EventData (EventDataBuilder/binary type (->Data data content-type))
-                       (merge props {:metadataAsBytes (->Data user content-type)}) {})
-      (builder/to-java EventData (EventDataBuilder/json type data)
-                       (merge props {:metadataAsJson user}) {}))))
+(defn ->Data [d]
+  (->> d json/generate-string (map byte) byte-array))
+
+(defn Data-> [d]
+  (-> d byte-array String. (json/parse-string true)))
+
+(defn ->EventData [{:keys [::event/type ::event/data ::metadata/user] :as event}]
+  (let [builder (-> (EventDataBuilder/json type (->Data data)) (.metadataAsBytes (->Data user)))
+        props (set/rename-keys event ->keymap)
+        opts {}]
+    (builder/to-java EventData builder props opts)))
+
+(s/fdef ->EventData
+  :args ::event
+  :ret #(instance? EventData %))
 
 (defn EventData-> [e]
-  (let [event (-> e j/from-java (set/rename-keys keymap->))
-        ct (::content-type event)]
+  (let [event (-> e j/from-java (set/rename-keys keymap->))]
     (-> event
         (update-some ::event/id ->uuid)
-        (update-some ::content-type ContentType->)
-        (update-some ::event/data #(Data-> % ct))
-        (update-some ::metadata/user #(Data-> % ct)))))
+        (update-some ::event/data Data->)
+        (update-some ::metadata/user Data->)
+        (dissoc ::content-type))))
 
-(-> {::event/id (uuid/v4)
-     ::event/type "type"
-     ::event/data "data"
-     ::content-type ::ct/octet-stream}
-    ->EventData
-    EventData->)
+(s/fdef EventData->
+  :args #(instance? EventData %)
+  :ret ::event)
 
 (defn ->RecordedEvent
-  [{:keys [::event/id ::event/type ::event/data
-           ::content-type ::created ::position]
-    stream-id ::stream/id stream-revision ::rev/stream  user-metadata ::metadata/user
-    :as event}]
+  [{:keys [::event/id ::event/type ::event/data ::created ::position]
+    stream-id ::stream/id stream-revision ::rev/stream  user-metadata ::metadata/user}]
   (new RecordedEvent stream-id (->StreamRevision stream-revision) id (->Position position)
-       {"content-type" (->ContentType content-type)
+       {"content-type" "application/json"
         "created" (str (Instant->Ticks created))
-        "is-json" (= content-type ::ct/json)
+        "is-json" true
         "type" type}
-       (x->ba data (= content-type ::ct/json))
-       (x->ba user-metadata (= content-type ::ct/json))))
+       (->Data data)
+       (->Data user-metadata)))
 
 (defn RecordedEvent-> [re]
-  (let [x (-> re j/from-java (set/rename-keys keymap->))
-        ct (::content-type x)]
+  (let [x (-> re j/from-java (set/rename-keys keymap->))]
     (-> x
         (update ::event/id ->uuid)
-        (update ::event/data #(Data-> % ct))
-        (update ::metadata/user #(Data-> % ct))
+        (update ::event/data Data->)
+        (update ::metadata/user Data->)
         (update ::position -Position->)
-        (update ::content-type ContentType->)
         (update ::rev/stream -StreamRevision->)
-        (update ::created #(java.time.Instant/ofEpochSecond (:epochSecond %) (:nano %))))))
-
-(-> {::event/id #uuid "12a91086-5de8-4bce-89b2-54274e191165"
-     ::event/type "type" ::event/data {:foo [:bar]}
-     ::rev/stream ::rev/end ::content-type ::ct/json ::created (time/instant)
-     ::position {::pos/commit 4 ::pos/prepare 3} ::stream/id "stream"
-     ::metadata/user ["flummox"]}
-    ->RecordedEvent
-    RecordedEvent->)
+        (update ::created #(java.time.Instant/ofEpochSecond (:epochSecond %) (:nano %)))
+        (dissoc ::content-type))))
 
 (defn ->ResolvedEvent [{:keys [::resolved/event ::resolved/link]}]
   (new ResolvedEvent (->RecordedEvent event) (->RecordedEvent link)))
@@ -381,15 +417,6 @@
 (defn ResolvedEvent-> [re]
   {::resolved/event (-> re .getEvent RecordedEvent->)
    ::resolved/link (-> re .getLink RecordedEvent->)})
-
-(-> {::event/id #uuid "12a91086-5de8-4bce-89b2-54274e191165"
-     ::event/type "type" ::event/data {:foo [:bar]}
-     ::rev/stream ::rev/end ::content-type ::ct/json ::created (time/instant)
-     ::position {::pos/commit 4 ::pos/prepare 3} ::stream/id "stream"
-     ::metadata/user ["flummox"]}
-    (#(assoc {} ::resolved/event % ::resolved/link %))
-    ->ResolvedEvent
-    ResolvedEvent->)
 
 (defn ->Listener [{::sub/keys [on-event on-error on-cancelled]}]
   (proxy [SubscriptionListener] []
@@ -423,10 +450,6 @@
     (NodePreference/READ_ONLY_REPLICA) ::np/read-only-replica
     (NodePreference/RANDOM)            ::np/random))
 
-(-> ::np/follower
-    ->NodePreference
-    NodePreference->)
-
 (defn ->Endpoint [{::ep/keys [hostname port]}]
   (new Endpoint hostname port))
 
@@ -435,10 +458,6 @@
 
 (defn Endpoint-> [ep]
   (-> ep j/from-java (set/rename-keys keymap->)))
-
-(-> {::ep/hostname "goole" ::ep/port 54444443}
-    ->Endpoint
-    Endpoint->)
 
 (defn add-host [^ConnectionSettingsBuilder builder host]
   (.addHost builder (->Endpoint host)))
