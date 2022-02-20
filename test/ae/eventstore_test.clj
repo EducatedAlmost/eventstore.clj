@@ -9,6 +9,7 @@
    [cheshire.core :as json]
    [clj-uuid :as uuid]
    [clojure.java.data :as j]
+   [clojure.java.data.builder :as builder]
    [java-time :as time]
    [ae.eventstore
     [content-type :as-alias ct]
@@ -42,10 +43,6 @@
   (t/testing "Present keys will be updated."
     (let [m {:foo 1} k :foo f inc n {:foo 2}]
       (t/is (= n (sut/update-some m k f))))))
-
-(t/deftest str->ba-test
-  (t/testing "str->ba spec."
-    (t/is (-> (stest/check `sut/str->ba) first ::stc/ret :pass?))))
 
 (t/deftest Instant->Ticks-test
   (spectest `sut/Instant->Ticks))
@@ -81,13 +78,12 @@
           type "e-type"
           data {:foo "bar"}
           u-meta {:tag 1}
-          event {:ae.eventstore.event/id id
-                 :ae.eventstore.event/type type
-                 :ae.eventstore.event/data data
-                 :ae.eventstore.metadata/user u-meta}
-          expected (-> (com.eventstore.dbclient.EventDataBuilder/json id type data)
-                       (.metadataAsJson u-meta)
-                       .build)
+          event {::event/id id
+                 ::event/type type
+                 ::event/data data
+                 ::metadata/user u-meta}
+          expected (new com.eventstore.dbclient.EventData
+                        id type "application/json" (sut/->Data data) (sut/->Data u-meta))
           actual (sut/->EventData event)]
       (t/is (= (j/from-java expected) (j/from-java actual))))))
 
@@ -150,6 +146,57 @@
                     ::stream/id stream-id
                     ::rev/stream ::rev/end
                     ::metadata/user u-meta}
-          actual (sut/RecordedEvent-> (sut/->RecordedEvent expected))]
-      (t/is (= (dissoc expected ::sut/created)
-               (dissoc actual ::sut/created))))))
+          actual (sut/RecordedEvent-> (sut/->RecordedEvent expected))
+          actual-instant (::sut/created actual)]
+      (t/is (sut/compare-events expected actual)))))
+
+(t/deftest ->ResolvedEvent-test
+  (t/testing ""
+    (let [event {:ae.eventstore.event/data {} ,
+                 :ae.eventstore/position #:ae.eventstore.position{:commit 2215, :prepare 2208} ,
+                 :ae.eventstore.revision/stream :ae.eventstore.revision/start,
+                 :ae.eventstore.event/type "kf23535Dfp5OVak7drrz" ,
+                 :ae.eventstore.metadata/user {} ,
+                 :ae.eventstore.stream/id "oDjKfG" ,
+                 :ae.eventstore.event/id #uuid "f8a7780e-3d7f-44d8-aac2-e7feb382a74c" ,
+                 :ae.eventstore/created (time/instant)}
+          link {:ae.eventstore.event/data {} ,
+                :ae.eventstore/position #:ae.eventstore.position{:commit 2215, :prepare 2208} ,
+                :ae.eventstore.revision/stream :ae.eventstore.revision/start,
+                :ae.eventstore.event/type "kf23535Dfp5OVak7drrz" ,
+                :ae.eventstore.metadata/user {} ,
+                :ae.eventstore.stream/id "oDjKfG" ,
+                :ae.eventstore.event/id #uuid "f8a7780e-3d7f-44d8-aac2-e7feb382a74c" ,
+                :ae.eventstore/created (time/instant)}
+          actual (sut/->ResolvedEvent {::resolved/event event ::resolved/link link})]
+      (t/is (sut/compare-events event (-> actual .getEvent sut/RecordedEvent->)))
+      (t/is (sut/compare-events link (-> actual .getLink sut/RecordedEvent->))))))
+
+(t/deftest ResolvedEvent->-test
+  (t/testing ""
+    (let [event {:ae.eventstore.event/data {} ,
+                 :ae.eventstore/position #:ae.eventstore.position{:commit 2215, :prepare 2208} ,
+                 :ae.eventstore.revision/stream :ae.eventstore.revision/start,
+                 :ae.eventstore.event/type "kf23535Dfp5OVak7drrz" ,
+                 :ae.eventstore.metadata/user {} ,
+                 :ae.eventstore.stream/id "oDjKfG" ,
+                 :ae.eventstore.event/id #uuid "f8a7780e-3d7f-44d8-aac2-e7feb382a74c" ,
+                 :ae.eventstore/created (time/instant)}
+          link {:ae.eventstore.event/data {} ,
+                :ae.eventstore/position #:ae.eventstore.position{:commit 2215, :prepare 2208} ,
+                :ae.eventstore.revision/stream :ae.eventstore.revision/start,
+                :ae.eventstore.event/type "kf23535Dfp5OVak7drrz" ,
+                :ae.eventstore.metadata/user {} ,
+                :ae.eventstore.stream/id "oDjKfG" ,
+                :ae.eventstore.event/id #uuid "f8a7780e-3d7f-44d8-aac2-e7feb382a74c" ,
+                :ae.eventstore/created (time/instant)}
+          expected {::resolved/event event ::resolved/link link}
+          actual (-> expected sut/->ResolvedEvent sut/ResolvedEvent->)]
+      (t/is (sut/compare-events event (::resolved/event actual)))
+      (t/is (sut/compare-events link (::resolved/link actual))))))
+
+(t/deftest ->Settings-test
+  (t/testing ""
+    (let [sett (gen/generate (s/gen ::sut/settings))
+          actual (-> sett sut/->Settings sut/Settings->)]
+      (t/is (= (dissoc sett ::sut/credentials) actual)))))

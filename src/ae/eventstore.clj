@@ -95,8 +95,6 @@
       (fn [] (gen/fmap time/instant (s/gen (s/and int? #(< 0 % (math/expt 2 32))))))))
   (s/def ::created ::instant)
 
-  (s/def ::json? boolean?)
-
   ;; TODO what is the relaiton between ExpectedRevision and StreamRevision?
   (s/def ::rev/stream (s/or :int ::long? :enum #{::rev/start ::rev/end}))
   (s/def ::rev/expected ;; actually unrelated to revision/stream
@@ -110,12 +108,12 @@
                        (s/gen (s/and int? #(> % -1)))))))
 
   (s/def ::metadata/user map?)
-  (s/def ::metadata/system (s/keys :req [::created ::json? ::event/type]))
+  (s/def ::metadata/created (s/with-gen string? (fn [] (gen/fmap str (s/gen int?)))))
+  (s/def ::metadata/json? boolean?)
+  (s/def ::metadata/system (s/keys :req [::metadata/created ::metadata/json? ::event/type]))
 
   (s/def ::event (s/keys :req [::event/id ::event/type ::event/data ::metadata/user]))
-  (s/def ::recorded
-    (s/merge ::event (s/keys :req [::stream/id ::rev/stream ::position ::created
-                                   ::metadata/user ::metadata/system])))
+  (s/def ::recorded (s/merge ::event (s/keys :req [::stream/id ::rev/stream ::position])))
 
   (s/def ::resolved/event ::recorded)
   (s/def ::resolved/link ::recorded)
@@ -319,7 +317,7 @@
 (s/fdef ->Position
   :args (s/cat :position ::position)
   :ret #(instance? Position %)
-  :fn (fn [x] (let [{:keys [::pos/prepare ::pos/commit] :as pos} (-> x :args :position)]
+  :fn (fn [x] (let [{:keys [::pos/prepare ::pos/commit]} (-> x :args :position)]
                 (and (= prepare (-> x :ret .getPrepareUnsigned))
                      (= commit (-> x :ret .getCommitUnsigned))))))
 
@@ -367,8 +365,8 @@
 (defn Data-> [d]
   (-> d byte-array String. (json/parse-string true)))
 
-(defn ->EventData [{:keys [::event/type ::event/data ::metadata/user] :as event}]
-  (let [builder (-> (EventDataBuilder/json type (->Data data)) (.metadataAsBytes (->Data user)))
+(defn ->EventData [{:keys [::event/id ::event/type ::event/data ::metadata/user] :as event}]
+  (let [builder (-> (EventDataBuilder/json id type (->Data data)) (.metadataAsBytes (->Data user)))
         props (set/rename-keys event ->keymap)
         opts {}]
     (builder/to-java EventData builder props opts)))
@@ -389,6 +387,15 @@
   :args #(instance? EventData %)
   :ret ::event)
 
+(defn compare-events [e1 e2]
+  (let [e1-inst (::created e1)
+        e2-inst (::created e2)]
+    (and (= (dissoc e1 ::created)
+            (dissoc e2 ::created))
+         (> 0 (.compareTo (time/duration e1-inst e2-inst)
+                          (time/duration 1 :micros))))))
+
+;; TODO Get rid of ::metadata/system
 (defn ->RecordedEvent
   [{:keys [::event/id ::event/type ::event/data ::created ::position]
     stream-id ::stream/id stream-revision ::rev/stream  user-metadata ::metadata/user}]
@@ -417,6 +424,14 @@
 (defn ResolvedEvent-> [re]
   {::resolved/event (-> re .getEvent RecordedEvent->)
    ::resolved/link (-> re .getLink RecordedEvent->)})
+
+(s/fdef ->ResolvedEvent
+  :args (s/cat :res ::resolved)
+  :ret #(instance? ResolvedEvent %)
+  :fn #(and (compare-events (-> % :args :res ::resolved/event)
+                            (-> % :ret ResolvedEvent-> ::resolved/event))
+            (compare-events (-> % :args :res ::resolved/link)
+                            (-> % :ret ResolvedEvent-> ::resolved/link))))
 
 (defn ->Listener [{::sub/keys [on-event on-error on-cancelled]}]
   (proxy [SubscriptionListener] []
@@ -488,7 +503,13 @@
          (dissoc :defaultCredentials)
          (#(if (some? credentials) (assoc % ::credentials credentials) %))
          (update ::node-preference -NodePreference->)
-         (update ::settings/hosts #(map -Endpoint-> %))))))
+         (update ::settings/hosts #(->> % (map -Endpoint->) reverse))))))
+
+(s/fdef ->Settings
+  :args (s/cat :settings ::settings)
+  :ret #(instance? EventStoreDBClientSettings %)
+  :fn #(= (-> % :args :settings (dissoc ::credentials))
+          (-> % :ret Settings->)))
 
 ;; Options
 
